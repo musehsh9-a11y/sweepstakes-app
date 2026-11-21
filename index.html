@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>懸賞応募管理</title>
+<style>
+  :root { --bg:#f6f6f8; --card:#fff; --text:#1c1c1e; --sub:#6e6e73; --line:#e3e3e8; --accent:#d6455a; --ok:#1d9e75; --warn:#e03131; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161618; --card:#232326; --text:#f2f2f5; --sub:#a1a1a6; --line:#3a3a3f; --accent:#ff6b81; --ok:#3ecf9a; --warn:#ff8787; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:16px; }
+  h1 { font-size:20px; margin:0 0 12px; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px; text-align:center; }
+  .stat b { display:block; font-size:20px; }
+  .stat span { font-size:11px; color:var(--sub); }
+  .controls { display:flex; gap:8px; padding:0 16px 12px; flex-wrap:wrap; }
+  select, input, button { font:inherit; }
+  select, .controls input { padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); }
+  #addBtn { background:var(--accent); color:#fff; border:none; padding:8px 14px; border-radius:8px; font-weight:600; }
+  main { padding:0 16px 32px; display:flex; flex-direction:column; gap:8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .card .org { font-size:12px; color:var(--sub); }
+  .card .name { font-weight:600; margin:2px 0; }
+  .card .meta { font-size:12px; color:var(--sub); display:flex; gap:10px; flex-wrap:wrap; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:99px; border:1px solid var(--line); }
+  .badge.applied { color:var(--sub); }
+  .badge.won { color:var(--ok); border-color:var(--ok); font-weight:700; }
+  .badge.lost { color:var(--sub); opacity:.6; }
+  .days { font-weight:700; }
+  .days.hot { color:var(--warn); }
+  .row { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+  .actions button { background:none; border:1px solid var(--line); border-radius:6px; padding:4px 8px; font-size:12px; color:var(--text); }
+  dialog { border:1px solid var(--line); border-radius:14px; background:var(--card); color:var(--text); width:min(92vw,420px); }
+  dialog form { display:flex; flex-direction:column; gap:10px; }
+  dialog label { font-size:12px; color:var(--sub); display:flex; flex-direction:column; gap:4px; }
+  dialog input, dialog select { padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  .formBtns { display:flex; gap:8px; justify-content:flex-end; }
+  .empty { text-align:center; color:var(--sub); padding:24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎁 懸賞応募管理</h1>
+  <div class="stats">
+    <div class="stat"><b id="stTotal">0</b><span>応募総数</span></div>
+    <div class="stat"><b id="stWon">0</b><span>当選</span></div>
+    <div class="stat"><b id="stWait">0</b><span>結果待ち</span></div>
+    <div class="stat"><b id="stRate">–</b><span>当選率</span></div>
+  </div>
+</header>
+<div class="controls">
+  <button id="addBtn">＋ 新規登録</button>
+  <select id="sortSel">
+    <option value="near">締切が近い順</option>
+    <option value="far">締切が遠い順</option>
+  </select>
+  <select id="filterSel">
+    <option value="all">すべて</option>
+    <option value="応募済み">応募済み</option>
+    <option value="当選">当選</option>
+    <option value="落選">落選</option>
+  </select>
+</div>
+<main id="list"></main>
+
+<dialog id="dlg">
+  <form method="dialog" id="editForm">
+    <h3 style="margin:0" id="dlgTitle">新規登録</h3>
+    <label>企業・団体名<input id="fOrg"></label>
+    <label>キャンペーン名 *<input id="fName" required></label>
+    <label>賞品<input id="fPrize"></label>
+    <label>当選人数<input id="fWinners" type="number" min="0"></label>
+    <label>締切日<input id="fDeadline" type="date"></label>
+    <label>応募日<input id="fApplied" type="date"></label>
+    <label>ステータス
+      <select id="fStatus">
+        <option>応募済み</option><option>当選</option><option>落選</option>
+      </select>
+    </label>
+    <div class="formBtns">
+      <button type="button" id="cancelBtn">キャンセル</button>
+      <button type="submit" id="saveBtn" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-weight:600">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const KEY = "kensho-entries-v1";
+const SEED = [];
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw !== null) return JSON.parse(raw);
+  } catch (e) {}
+  return (typeof SEED !== "undefined") ? SEED.slice() : [];
+}
+let entries = load();
+let editId = null;
+
+function save() { localStorage.setItem(KEY, JSON.stringify(entries)); }
+function todayStr() { const d = new Date(); return d.toISOString().slice(0, 10); }
+function daysLeft(deadline) {
+  if (!deadline) return null;
+  const t = new Date(todayStr()), d = new Date(deadline);
+  return Math.round((d - t) / 86400000);
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+function render() {
+  const total = entries.length;
+  const won = entries.filter(e => e.status === "当選").length;
+  const decided = entries.filter(e => e.status === "当選" || e.status === "落選").length;
+  document.getElementById("stTotal").textContent = total;
+  document.getElementById("stWon").textContent = won;
+  document.getElementById("stWait").textContent = total - decided;
+  document.getElementById("stRate").textContent = decided ? Math.round(won / decided * 100) + "%" : "–";
+
+  const sort = document.getElementById("sortSel").value;
+  const filter = document.getElementById("filterSel").value;
+  let rows = entries.filter(e => filter === "all" || e.status === filter);
+  rows.sort((a, b) => {
+    const da = a.deadline || "9999-12-31", db = b.deadline || "9999-12-31";
+    return sort === "near" ? da.localeCompare(db) : db.localeCompare(da);
+  });
+  const list = document.getElementById("list");
+  if (!rows.length) { list.innerHTML = '<div class="empty">表示する応募がありません</div>'; return; }
+  list.innerHTML = rows.map(e => {
+    const dl = daysLeft(e.deadline);
+    let days = "";
+    if (dl !== null) {
+      const label = dl > 0 ? `あと${dl}日` : dl === 0 ? "本日締切！" : `締切済み（${-dl}日前）`;
+      days = `<span class="days${dl <= 3 ? " hot" : ""}">${label}</span>`;
+    }
+    const badgeCls = e.status === "当選" ? "won" : e.status === "落選" ? "lost" : "applied";
+    return `<div class="card">
+      <div class="row">
+        <div>
+          <div class="org">${esc(e.org)}</div>
+          <div class="name">${esc(e.name)}</div>
+          <div class="meta">
+            <span>賞品：${esc(e.prize) || "–"}</span>
+            <span>当選人数：${e.winners ? esc(e.winners) : "–"}</span>
+            <span>締切：${esc(e.deadline) || "–"}</span>
+            <span>応募日：${esc(e.applied) || "–"}</span>
+            ${days}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+          <span class="badge ${badgeCls}">${esc(e.status)}</span>
+          <div class="actions">
+            <button onclick="openEdit(${e.id})">編集</button>
+            <button onclick="removeEntry(${e.id})">削除</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function openEdit(id) {
+  editId = id;
+  const e = entries.find(x => x.id === id);
+  document.getElementById("dlgTitle").textContent = "編集";
+  fOrg.value = e.org || ""; fName.value = e.name || ""; fPrize.value = e.prize || "";
+  fWinners.value = e.winners || ""; fDeadline.value = e.deadline || "";
+  fApplied.value = e.applied || ""; fStatus.value = e.status || "応募済み";
+  dlg.showModal();
+}
+function removeEntry(id) {
+  if (!confirm("この応募を削除しますか？")) return;
+  entries = entries.filter(x => x.id !== id);
+  save(); render();
+}
+const dlg = document.getElementById("dlg");
+const fOrg = document.getElementById("fOrg"), fName = document.getElementById("fName"),
+      fPrize = document.getElementById("fPrize"), fWinners = document.getElementById("fWinners"),
+      fDeadline = document.getElementById("fDeadline"), fApplied = document.getElementById("fApplied"),
+      fStatus = document.getElementById("fStatus");
+
+document.getElementById("addBtn").onclick = () => {
+  editId = null;
+  document.getElementById("dlgTitle").textContent = "新規登録";
+  fOrg.value = ""; fName.value = ""; fPrize.value = ""; fWinners.value = "";
+  fDeadline.value = ""; fApplied.value = todayStr(); fStatus.value = "応募済み";
+  dlg.showModal();
+};
+document.getElementById("cancelBtn").onclick = () => dlg.close();
+document.getElementById("editForm").addEventListener("submit", ev => {
+  ev.preventDefault();
+  if (!fName.value.trim()) return;
+  const data = {
+    org: fOrg.value.trim(), name: fName.value.trim(), prize: fPrize.value.trim(),
+    winners: fWinners.value ? Number(fWinners.value) : "",
+    deadline: fDeadline.value, applied: fApplied.value, status: fStatus.value
+  };
+  if (editId === null) {
+    data.id = Date.now();
+    entries.push(data);
+  } else {
+    Object.assign(entries.find(x => x.id === editId), data);
+  }
+  save(); render(); dlg.close();
+});
+document.getElementById("sortSel").onchange = render;
+document.getElementById("filterSel").onchange = render;
+render();
+</script>
+</body>
+</html>
